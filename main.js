@@ -75,6 +75,14 @@ function getThisYearMonthStr() {
  */
 function getHourMinuterStr(num) {
     if(isNaN(num)) return NaN;
+
+    const isNegative = (num < 0);
+    let sign = '';
+    if(isNegative){
+        sign = '-';
+        num *= (-1);
+    }
+
     let hour   = Math.floor(num);
     let minute = Math.round((num - hour) * 60);
     if(minute < 10) minute = '0' + minute;
@@ -82,7 +90,8 @@ function getHourMinuterStr(num) {
         hour += 1;
         minute = '00';
     }
-    return `${hour}.${minute}`;
+
+    return `${sign}${hour}.${minute}`;
 }
 
 /**
