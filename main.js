@@ -1,5 +1,6 @@
-const WORKDAY_STR     = '平日';
-const TIME_REGEXP     = /\d+.\d\d/;
+const WORKDAY_STR             = '平日';
+const TIME_REGEXP             = /\d+.\d\d/;
+const DEFAULT_BASIS_WORK_TIME = 8;
 
 const BASIS_WORK_TIME_ELM   = document.querySelectorAll('.custom2')[1];
 const WORK_TIME_ELM         = document.querySelectorAll('.custom3')[1];
@@ -42,8 +43,9 @@ function showAveTime() {
     if(workDays === 0 || fullWorkDays === 0) return;
 
     // 1日の基準労働時間と当月総労働時間を取得 一度時間の数値に変える（ex. '8.30' -> 8.5）
-    const daylyBasisWorkTime = getHourNumFromHourMinuteStr(BASIS_WORK_TIME_ELM.innerHTML) / fullWorkDays;
-    const workTime           = getHourNumFromHourMinuteStr(WORK_TIME_ELM.innerText); 
+    let daylyBasisWorkTime = getHourNumFromHourMinuteStr(BASIS_WORK_TIME_ELM.innerHTML) / fullWorkDays;
+    if(isNaN(daylyBasisWorkTime) || daylyBasisWorkTime <= 0) daylyBasisWorkTime = DEFAULT_BASIS_WORK_TIME;
+    const workTime = getHourNumFromHourMinuteStr(WORK_TIME_ELM.innerText); 
 
     // 平均時間を計算・表示
     const aveWorkTime  = getHourMinuterStr(workTime / workDays);
