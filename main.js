@@ -3,16 +3,18 @@ const TIME_REGEXP     = /\d+.\d\d/;
 const BASIS_WORK_TIME = 8;
 
 // メーターの設定
-const OVER_MARK_HOURS = 30;  // 契約時間からの目印（契約 +30h）
-const METER_HEADROOM  = 75;  // メーターの上限（契約時間 + これ）
+const WEEKLY_STATUTORY_HOURS = 40;  // 法定労働時間（週）
+const OVER_MARK_STATUTORY    = 45;  // 法定労働時間からの目印（法定 +45h）
+const OVER_MARK_CONTRACT     = 30;  // 契約時間からの目印（契約 +30h）
+const METER_HEADROOM         = 75;  // メーターの上限（基準 + これ）
 
 const COLOR = {
-    within  : '#4a6ea8',  // 契約時間内
+    within  : '#4a6ea8',  // 基準内・契約内
     over    : '#8a5712',  // 超過（目印まで）
     overHard: '#a8402c',  // 超過（目印を超えた分）
     track   : '#e7eaf0',  // 残枠
-    mark    : '#3d444f',  // 契約時間の目印
-    markWarn: '#a8402c',  // +30h の目印
+    mark    : '#3d444f',  // 基準（法定／契約）の目印
+    markWarn: '#a8402c',  // 目印（+45h / +30h）
     markNow : '#8a9099',  // 現時点の基準（当月のみ）
     ink     : '#3d444f',
     muted   : '#6b7280'
@@ -61,14 +63,21 @@ function showAveTime() {
     const workTimeStr = WORK_TIME_ELM.innerText;
     const workTime = getHourNumFromHourMinuteStr(workTimeStr);
 
+    // 賃金計算期間の暦日数（法定労働時間の枠に使う）。行数が不自然なら選択中の年月から求める
+    let calendarDays = WORK_DAY_TYPE_ELMS.length;
+    if(calendarDays < 28 || calendarDays > 31) calendarDays = getDaysInMonth(YEAR_MONTH_SELECT_ELM.value);
+
     // バルーンに渡す値をまとめる
     const summary = {
-        workTime     : workTime,                       // 当月の総労働時間
+        workTime     : workTime,                        // 当月の総労働時間
         workTimeStr  : workTimeStr,                     // 画面表記そのまま
         workDays     : workDays,                        // 勤務日+有給日数（先月以前は平日数）
         fullWorkDays : fullWorkDays,                    // 月全体の平日数
+        calendarDays : calendarDays,                    // 賃金計算期間の暦日数
         nowBasis     : BASIS_WORK_TIME * workDays,      // 現時点の基準時間
         contract     : BASIS_WORK_TIME * fullWorkDays,  // 月間の契約時間（8h × 平日数）
+        // 法定労働時間の枠（週40h × 暦日数 ÷ 7）。KOT の「基準時間」に一致するよう分未満は切り捨てる
+        statutory    : floorToMinute(WEEKLY_STATUTORY_HOURS * calendarDays / 7),
         isThisMonth  : isThisMonth
     };
 
@@ -107,7 +116,7 @@ function createToggle(labelText, summary, classPrefix) {
     const balloon = mk('span',
         'display:none;position:absolute;left:0;top:1.6em;z-index:9999;' +
         'background:#fff;border:1px solid #999;border-radius:6px;padding:8px 10px;' +
-        'box-shadow:0 2px 8px rgba(0,0,0,0.15);width:360px;max-width:80vw;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,0.15);width:380px;max-width:80vw;' +
         'white-space:normal;text-align:left;line-height:1.5;font-weight:normal;');
     balloon.classList.add(classPrefix + '-balloon');
     balloon.appendChild(createSummaryRows(summary));
@@ -125,14 +134,21 @@ function createToggle(labelText, summary, classPrefix) {
  * @returns {HTMLElement}
  */
 function createSummaryRows(s) {
-    const over = s.workTime - s.contract;
+    const overContract  = s.workTime - s.contract;
+    const overStatutory = s.workTime - s.statutory;
+
     const rows = [
         ['勤務日+有給日数', s.workDays + '日'],
         ['基準時間（8h × 上記日数）', getHourMinuterStr(s.nowBasis) + '時間'],
         ['労働時間', s.workTimeStr + '時間'],
         ['契約時間（8h × 平日' + s.fullWorkDays + '日）', getHourMinuterStr(s.contract) + '時間'],
-        [(over >= 0 ? '契約時間の超過' : '契約時間まで残り'), getHourMinuterStr(Math.abs(over)) + '時間']
+        [(overContract >= 0 ? '契約時間の超過' : '契約時間まで残り'), getHourMinuterStr(Math.abs(overContract)) + '時間']
     ];
+    if(s.statutory > 0) {
+        rows.push(['法定労働時間（40h × ' + s.calendarDays + '日 ÷ 7）', getHourMinuterStr(s.statutory) + '時間']);
+        rows.push([(overStatutory >= 0 ? '法定労働時間の超過' : '法定労働時間まで残り'),
+                   getHourMinuterStr(Math.abs(overStatutory)) + '時間']);
+    }
 
     const box = mk('span', 'display:block;');
     rows.forEach(([label, value]) => {
@@ -145,68 +161,45 @@ function createSummaryRows(s) {
 }
 
 /**
- * 契約時間ベースのメーターを作る
- * 目盛りは 0 〜（契約時間 + METER_HEADROOM）。契約時間と +OVER_MARK_HOURS に目印を立てる
+ * メーターを作る（法定労働時間ベースと契約時間ベースを同じ目盛りで 2 段）
  * @param   {object} s summary
  * @returns {HTMLElement}
  */
 function createMeter(s) {
-    const ceiling = s.contract + METER_HEADROOM;
-    const rate    = (x) => (Math.max(0, x) / ceiling * 100).toFixed(2) + '%';
-
-    const within = Math.min(s.workTime, s.contract);
-    const over   = Math.max(0, s.workTime - s.contract);
-    const over1  = Math.min(over, OVER_MARK_HOURS);
-    const over2  = Math.max(0, over - OVER_MARK_HOURS);
-
+    const ceiling = Math.max(s.statutory, s.contract) + METER_HEADROOM;
     const wrap = mk('span', 'display:block;margin-top:8px;');
 
     // 見出し
     const head = mk('span', 'display:flex;justify-content:space-between;gap:10px;font-size:11px;color:' + COLOR.muted + ';');
     head.appendChild(mk('span', 'color:' + COLOR.ink + ';font-weight:bold;', '労働時間 ' + getHourMinuterStr(s.workTime)));
-    head.appendChild(mk('span', null, '上限 ' + getHourMinuterStr(ceiling) + '（契約 +' + METER_HEADROOM + 'h）'));
+    head.appendChild(mk('span', null, '上限 ' + getHourMinuterStr(ceiling) + '（+' + METER_HEADROOM + 'h）'));
     wrap.appendChild(head);
 
-    // トラック
-    const track = mk('span', 'display:block;position:relative;height:16px;margin-top:4px;border-radius:3px;background:' + COLOR.track + ';');
-    const addSeg = (from, len, color, title) => {
-        if(len <= 0) return;
-        const seg = mk('span',
-            'position:absolute;top:0;bottom:0;left:' + rate(from) + ';width:' + rate(len) + ';' +
-            'min-width:2px;background:' + color + ';');
-        seg.title = title;
-        track.appendChild(seg);
-    };
-    addSeg(0, within, COLOR.within, '契約時間内 ' + getHourMinuterStr(within));
-    addSeg(within, over1, COLOR.over, '超過（+' + OVER_MARK_HOURS + 'h まで） ' + getHourMinuterStr(over1));
-    addSeg(within + over1, over2, COLOR.overHard, '超過（+' + OVER_MARK_HOURS + 'h 超） ' + getHourMinuterStr(over2));
-
-    const addMark = (x, color, title) => {
-        if(x > ceiling) return;
-        const mark = mk('span',
-            'position:absolute;top:-3px;bottom:-3px;left:' + rate(x) + ';width:2px;background:' + color + ';opacity:.8;');
-        mark.title = title;
-        track.appendChild(mark);
-    };
-    addMark(s.contract, COLOR.mark, '契約時間 ' + getHourMinuterStr(s.contract));
-    addMark(s.contract + OVER_MARK_HOURS, COLOR.markWarn,
-            '契約 +' + OVER_MARK_HOURS + 'h = ' + getHourMinuterStr(s.contract + OVER_MARK_HOURS));
-    // 当月は「現時点の基準（8h × 経過した勤務日数）」も薄く立てる
-    if(s.isThisMonth && s.nowBasis < s.contract) {
-        addMark(s.nowBasis, COLOR.markNow, '現時点の基準 ' + getHourMinuterStr(s.nowBasis));
+    // 法定労働時間ベース
+    if(s.statutory > 0) {
+        wrap.appendChild(createTrackBlock(s, {
+            title   : '法定',
+            base    : s.statutory,
+            mark    : OVER_MARK_STATUTORY,
+            sub     : '40h × ' + s.calendarDays + '日 ÷ 7',
+            ceiling : ceiling
+        }));
     }
-    wrap.appendChild(track);
 
-    // 軸
-    const axis = mk('span', 'display:block;position:relative;height:13px;margin-top:2px;font-size:10px;color:' + COLOR.muted + ';');
-    const axisLabel = (text, style) => {
-        const lab = mk('span', 'position:absolute;top:0;white-space:nowrap;' + style, text);
-        axis.appendChild(lab);
-    };
-    axisLabel('0', 'left:0;');
-    axisLabel('契約 ' + getHourMinuterStr(s.contract), 'left:' + rate(s.contract) + ';transform:translateX(-50%);');
-    axisLabel('+' + OVER_MARK_HOURS + 'h', 'left:' + rate(s.contract + OVER_MARK_HOURS) + ';transform:translateX(-50%);');
-    axisLabel(getHourMinuterStr(ceiling), 'right:0;');
+    // 契約時間ベース
+    wrap.appendChild(createTrackBlock(s, {
+        title       : '契約',
+        base        : s.contract,
+        mark        : OVER_MARK_CONTRACT,
+        sub         : '8h × 平日' + s.fullWorkDays + '日',
+        ceiling     : ceiling,
+        showNowMark : true
+    }));
+
+    // 軸（両ベースで基準の位置が違うので、目盛りは 0 と上限だけ。基準値は各段の見出しに出す）
+    const axis = mk('span', 'display:flex;justify-content:space-between;margin-top:2px;font-size:10px;color:' + COLOR.muted + ';');
+    axis.appendChild(mk('span', null, '0'));
+    axis.appendChild(mk('span', null, getHourMinuterStr(ceiling)));
     wrap.appendChild(axis);
 
     // 凡例
@@ -217,13 +210,70 @@ function createMeter(s) {
         item.appendChild(mk('span', null, text));
         legend.appendChild(item);
     };
-    legendItem(COLOR.within, '契約時間内 ' + getHourMinuterStr(within));
-    legendItem(COLOR.over, '超過 〜+' + OVER_MARK_HOURS + 'h ' + getHourMinuterStr(over1));
-    legendItem(COLOR.overHard, '超過 +' + OVER_MARK_HOURS + 'h 超 ' + getHourMinuterStr(over2));
-    legendItem(COLOR.track, '残枠 ' + getHourMinuterStr(Math.max(0, ceiling - s.workTime)));
+    legendItem(COLOR.within, '基準内');
+    legendItem(COLOR.over, '超過（目印まで）');
+    legendItem(COLOR.overHard, '超過（目印を超えた分）');
+    legendItem(COLOR.track, '残枠');
     wrap.appendChild(legend);
 
     return wrap;
+}
+
+/**
+ * メーター 1 段ぶん（見出し + トラック）を作る
+ * @param   {object} s   summary
+ * @param   {object} opt title / base / mark / sub / ceiling / showNowMark
+ * @returns {HTMLElement}
+ */
+function createTrackBlock(s, opt) {
+    const ceiling = opt.ceiling;
+    const rate    = (x) => (Math.max(0, x) / ceiling * 100).toFixed(2) + '%';
+
+    const within = Math.min(s.workTime, opt.base);
+    const over   = Math.max(0, s.workTime - opt.base);
+    const over1  = Math.min(over, opt.mark);
+    const over2  = Math.max(0, over - opt.mark);
+
+    const block = mk('span', 'display:block;margin-top:6px;');
+
+    // 見出し（基準値と目印をここに書く）
+    const label = mk('span', 'display:block;font-size:10px;color:' + COLOR.muted + ';');
+    label.appendChild(mk('span', 'color:' + COLOR.ink + ';', opt.title + ' ' + getHourMinuterStr(opt.base)));
+    label.appendChild(mk('span', null, '（' + opt.sub + '）・目印 +' + opt.mark + 'h'
+        + (over2 > 0 ? '　超過 +' + opt.mark + 'h を ' + getHourMinuterStr(over2) + ' 超' : '')));
+    block.appendChild(label);
+
+    // トラック
+    const track = mk('span', 'display:block;position:relative;height:14px;margin-top:2px;border-radius:3px;background:' + COLOR.track + ';');
+    const addSeg = (from, len, color, title) => {
+        if(len <= 0) return;
+        const seg = mk('span',
+            'position:absolute;top:0;bottom:0;left:' + rate(from) + ';width:' + rate(len) + ';' +
+            'min-width:2px;background:' + color + ';');
+        seg.title = title;
+        track.appendChild(seg);
+    };
+    addSeg(0, within, COLOR.within, opt.title + '内 ' + getHourMinuterStr(within));
+    addSeg(within, over1, COLOR.over, '超過（+' + opt.mark + 'h まで） ' + getHourMinuterStr(over1));
+    addSeg(within + over1, over2, COLOR.overHard, '超過（+' + opt.mark + 'h 超） ' + getHourMinuterStr(over2));
+
+    const addMark = (x, color, title) => {
+        if(x > ceiling) return;
+        const mark = mk('span',
+            'position:absolute;top:-3px;bottom:-3px;left:' + rate(x) + ';width:2px;background:' + color + ';opacity:.8;');
+        mark.title = title;
+        track.appendChild(mark);
+    };
+    addMark(opt.base, COLOR.mark, opt.title + ' ' + getHourMinuterStr(opt.base));
+    addMark(opt.base + opt.mark, COLOR.markWarn,
+            opt.title + ' +' + opt.mark + 'h = ' + getHourMinuterStr(opt.base + opt.mark));
+    // 当月は「現時点の基準（8h × 経過した勤務日数）」も薄く立てる
+    if(opt.showNowMark && s.isThisMonth && s.nowBasis < opt.base) {
+        addMark(s.nowBasis, COLOR.markNow, '現時点の基準 ' + getHourMinuterStr(s.nowBasis));
+    }
+    block.appendChild(track);
+
+    return block;
 }
 
 /**
@@ -238,6 +288,26 @@ function mk(tag, style, text) {
     if(style) elm.style.cssText = style;
     if(text !== undefined && text !== null) elm.textContent = text;
     return elm;
+}
+
+/**
+ * 分未満を切り捨てた時間数を返す（KOT の表示と桁を合わせるため）
+ * @param   {number} hours
+ * @returns {number}
+ */
+function floorToMinute(hours) {
+    return Math.floor(hours * 60) / 60;
+}
+
+/**
+ * 'YYYY/MM' からその月の日数を返す
+ * @param   {string} yearMonthStr
+ * @returns {number} 日数（読めなければ 0）
+ */
+function getDaysInMonth(yearMonthStr) {
+    const matched = String(yearMonthStr).match(/(\d{4})\D(\d{1,2})/);
+    if(!matched) return 0;
+    return new Date(Number(matched[1]), Number(matched[2]), 0).getDate();
 }
 
 /**
