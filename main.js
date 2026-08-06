@@ -159,7 +159,7 @@ function createToggle(labelText, summary, classPrefix) {
     toggle.classList.add(classPrefix + '-toggle');
 
     const balloon = mk('span',
-        'display:none;position:absolute;left:0;top:1.6em;z-index:9999;' +
+        'display:none;position:absolute;right:0;top:1.6em;z-index:9999;' +
         'background:#fff;border:1px solid #999;border-radius:6px;padding:8px 10px;' +
         'box-shadow:0 2px 8px rgba(0,0,0,0.15);width:380px;max-width:80vw;' +
         'white-space:normal;text-align:left;line-height:1.5;font-weight:normal;');
