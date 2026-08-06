@@ -6,19 +6,19 @@ const BASE_TIME_LABEL = '元の基準時間';
 // メーターの設定
 const WEEKLY_STATUTORY_HOURS = 40;  // 法定労働時間（週）。基準時間が画面から取れないときの計算に使う
 const OVER_MARK_BASE         = 45;  // 基準時間からの目印（基準 +45h）
-const OVER_MARK_CONTRACT     = 30;  // 契約時間からの目印（契約 +30h）
+const OVER_MARK_SCHEDULED    = 30;  // 所定時間からの目印（所定 +30h）
 const METER_HEADROOM         = 75;  // メーターの上限（基準 + これ）
 
 // 各段に添える運用上の注意
-const NOTE_BASE     = '基準を ' + OVER_MARK_BASE + ' 時間超過しそうな場合は上長への申請が必要';
-const NOTE_CONTRACT = '契約の時間外労働（超過分）の時間は残業代の計算に用いられる';
+const NOTE_BASE      = '基準を ' + OVER_MARK_BASE + ' 時間超過しそうな場合は上長への申請が必要';
+const NOTE_SCHEDULED = '所定時間外労働（超過分）の時間は残業代の計算に用いられる';
 
 const COLOR = {
-    within   : '#4a6ea8',  // 基準内・契約内
+    within   : '#4a6ea8',  // 基準内・所定内
     over     : '#8a5712',  // 超過（目印まで）
     overHard : '#a8402c',  // 超過（目印を超えた分）
     track    : '#e7eaf0',  // 残枠
-    mark     : '#3d444f',  // 基準（基準時間／契約時間）の目印
+    mark     : '#3d444f',  // 基準（基準時間／所定時間）の目印
     markWarn : '#a8402c',  // 目印（+45h / +30h）
     markNow  : '#8a9099',  // 現時点の基準（当月のみ）
     projected: '#7d90ad',  // 着地見込みの目印
@@ -99,7 +99,7 @@ function showAveTime() {
         remainingDays   : remainingDays,                   // 未消化の平日
         projected       : projected,                       // 8h で埋めた場合の着地見込み
         nowBasis        : BASIS_WORK_TIME * workDays,      // 現時点の基準時間
-        contract        : BASIS_WORK_TIME * fullWorkDays,  // 月間の契約時間（8h × 平日数）
+        scheduled       : BASIS_WORK_TIME * fullWorkDays,  // 月間の所定時間（8h × 平日数）
         baseTime        : baseTime,                        // 基準時間（元の基準時間 or 法定労働時間の枠）
         isBaseFromScreen: isBaseFromScreen,                // 基準時間を画面から取れたか
         isThisMonth     : isThisMonth
@@ -190,15 +190,15 @@ function getBaseTimeSource(s) {
  * @returns {HTMLElement}
  */
 function createSummaryRows(s) {
-    const overContract = s.workTime - s.contract;
-    const overBase     = s.workTime - s.baseTime;
+    const overScheduled = s.workTime - s.scheduled;
+    const overBase      = s.workTime - s.baseTime;
 
     const rows = [
         ['勤務日+有給日数', s.workDays + '日'],
         ['基準時間（8h × 上記日数）', getHourMinuterStr(s.nowBasis) + '時間'],
         ['労働時間', s.workTimeStr + '時間'],
-        ['契約時間（8h × 平日' + s.fullWorkDays + '日）', getHourMinuterStr(s.contract) + '時間'],
-        [(overContract >= 0 ? '契約時間の超過' : '契約時間まで残り'), getHourMinuterStr(Math.abs(overContract)) + '時間']
+        ['所定時間（8h × 平日' + s.fullWorkDays + '日）', getHourMinuterStr(s.scheduled) + '時間'],
+        [(overScheduled >= 0 ? '所定時間の超過' : '所定時間まで残り'), getHourMinuterStr(Math.abs(overScheduled)) + '時間']
     ];
     if(s.baseTime > 0) {
         rows.push([BASE_TIME_LABEL + '（' + getBaseTimeSource(s) + '）', getHourMinuterStr(s.baseTime) + '時間']);
@@ -221,14 +221,14 @@ function createSummaryRows(s) {
 }
 
 /**
- * メーターを作る（基準時間ベースと契約時間ベースを同じ目盛りで 2 段）
+ * メーターを作る（基準時間ベースと所定時間ベースを同じ目盛りで 2 段）
  * @param   {object} s summary
  * @returns {HTMLElement}
  */
 function createMeter(s) {
     // 目盛りの端は時間単位に切り上げる（分が出ると読みにくいため）
     // 切り上げなので、基準 +75h や見込みがはみ出すことはない
-    const headroomCeiling = Math.max(s.baseTime, s.contract) + METER_HEADROOM;
+    const headroomCeiling = Math.max(s.baseTime, s.scheduled) + METER_HEADROOM;
     const ceiling = Math.ceil(Math.max(headroomCeiling, s.projected));
     const wrap = mk('span', 'display:block;margin-top:8px;');
 
@@ -251,13 +251,13 @@ function createMeter(s) {
         }));
     }
 
-    // 契約時間ベース
+    // 所定時間ベース
     wrap.appendChild(createTrackBlock(s, {
-        title       : '契約',
-        base        : s.contract,
-        mark        : OVER_MARK_CONTRACT,
+        title       : '所定',
+        base        : s.scheduled,
+        mark        : OVER_MARK_SCHEDULED,
         sub         : '8h × 平日' + s.fullWorkDays + '日',
-        note        : NOTE_CONTRACT,
+        note        : NOTE_SCHEDULED,
         ceiling     : ceiling,
         showNowMark : true
     }));
@@ -276,7 +276,7 @@ function createMeter(s) {
         item.appendChild(mk('span', null, text));
         legend.appendChild(item);
     };
-    legendItem(COLOR.within, '基準内');
+    legendItem(COLOR.within, '基準内・所定内');
     legendItem(COLOR.over, '超過（目印まで）');
     legendItem(COLOR.overHard, '超過（目印を超えた分）');
     if(s.remainingDays > 0) legendItem(PROJECTED_FILL, '見込み（未消化 × 8h）');
