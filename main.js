@@ -10,16 +10,21 @@ const OVER_MARK_CONTRACT     = 30;  // 契約時間からの目印（契約 +30h
 const METER_HEADROOM         = 75;  // メーターの上限（基準 + これ）
 
 const COLOR = {
-    within  : '#4a6ea8',  // 基準内・契約内
-    over    : '#8a5712',  // 超過（目印まで）
-    overHard: '#a8402c',  // 超過（目印を超えた分）
-    track   : '#e7eaf0',  // 残枠
-    mark    : '#3d444f',  // 基準（基準時間／契約時間）の目印
-    markWarn: '#a8402c',  // 目印（+45h / +30h）
-    markNow : '#8a9099',  // 現時点の基準（当月のみ）
-    ink     : '#3d444f',
-    muted   : '#6b7280'
+    within   : '#4a6ea8',  // 基準内・契約内
+    over     : '#8a5712',  // 超過（目印まで）
+    overHard : '#a8402c',  // 超過（目印を超えた分）
+    track    : '#e7eaf0',  // 残枠
+    mark     : '#3d444f',  // 基準（基準時間／契約時間）の目印
+    markWarn : '#a8402c',  // 目印（+45h / +30h）
+    markNow  : '#8a9099',  // 現時点の基準（当月のみ）
+    projected: '#7d90ad',  // 着地見込みの目印
+    ink      : '#3d444f',
+    muted    : '#6b7280'
 };
+
+// 着地見込みの区間（実績ではないので斜線で描く）
+const PROJECTED_FILL = 'repeating-linear-gradient(135deg,' +
+    ' rgba(74,110,168,.38) 0 4px, rgba(74,110,168,.12) 4px 8px)';
 
 const KINTAI_TABLE_ELM      = document.querySelector('.htBlock-adjastableTableF table');
 const WORK_TIME_ELM         = document.querySelectorAll('.all_work_time')[1];
@@ -76,6 +81,10 @@ function showAveTime() {
         ? baseTimeFromScreen
         : floorToMinute(WEEKLY_STATUTORY_HOURS * calendarDays / 7);
 
+    // 未消化の平日を 8h ずつ（残業も不足もなし）で埋めた場合の着地見込み
+    const remainingDays = Math.max(0, fullWorkDays - workDays);
+    const projected = workTime + BASIS_WORK_TIME * remainingDays;
+
     // バルーンに渡す値をまとめる
     const summary = {
         workTime        : workTime,                        // 当月の総労働時間
@@ -83,6 +92,8 @@ function showAveTime() {
         workDays        : workDays,                        // 勤務日+有給日数（先月以前は平日数）
         fullWorkDays    : fullWorkDays,                    // 月全体の平日数
         calendarDays    : calendarDays,                    // 賃金計算期間の暦日数
+        remainingDays   : remainingDays,                   // 未消化の平日
+        projected       : projected,                       // 8h で埋めた場合の着地見込み
         nowBasis        : BASIS_WORK_TIME * workDays,      // 現時点の基準時間
         contract        : BASIS_WORK_TIME * fullWorkDays,  // 月間の契約時間（8h × 平日数）
         baseTime        : baseTime,                        // 基準時間（元の基準時間 or 法定労働時間の枠）
@@ -190,6 +201,10 @@ function createSummaryRows(s) {
         rows.push([(overBase >= 0 ? BASE_TIME_LABEL + 'の超過' : BASE_TIME_LABEL + 'まで残り'),
                    getHourMinuterStr(Math.abs(overBase)) + '時間']);
     }
+    if(s.remainingDays > 0) {
+        rows.push(['未消化の平日', s.remainingDays + '日']);
+        rows.push(['8h で埋めた場合の見込み', getHourMinuterStr(s.projected) + '時間']);
+    }
 
     const box = mk('span', 'display:block;');
     rows.forEach(([label, value]) => {
@@ -207,13 +222,15 @@ function createSummaryRows(s) {
  * @returns {HTMLElement}
  */
 function createMeter(s) {
-    const ceiling = Math.max(s.baseTime, s.contract) + METER_HEADROOM;
+    // 見込みが枠を超える場合は目盛りを見込みまで広げる
+    const headroomCeiling = Math.max(s.baseTime, s.contract) + METER_HEADROOM;
+    const ceiling = Math.max(headroomCeiling, s.projected);
     const wrap = mk('span', 'display:block;margin-top:8px;');
 
     // 見出し
     const head = mk('span', 'display:flex;justify-content:space-between;gap:10px;font-size:11px;color:' + COLOR.muted + ';');
     head.appendChild(mk('span', 'color:' + COLOR.ink + ';font-weight:bold;', '労働時間 ' + getHourMinuterStr(s.workTime)));
-    head.appendChild(mk('span', null, '上限 ' + getHourMinuterStr(ceiling) + '（+' + METER_HEADROOM + 'h）'));
+    head.appendChild(mk('span', null, '+' + METER_HEADROOM + 'h の枠 ' + getHourMinuterStr(headroomCeiling)));
     wrap.appendChild(head);
 
     // 基準時間ベース
@@ -245,15 +262,16 @@ function createMeter(s) {
 
     // 凡例
     const legend = mk('span', 'display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:10px;color:' + COLOR.muted + ';');
-    const legendItem = (color, text) => {
+    const legendItem = (background, text) => {
         const item = mk('span', 'display:inline-flex;align-items:center;gap:4px;');
-        item.appendChild(mk('span', 'width:8px;height:8px;border-radius:2px;background:' + color + ';'));
+        item.appendChild(mk('span', 'width:8px;height:8px;border-radius:2px;background:' + background + ';'));
         item.appendChild(mk('span', null, text));
         legend.appendChild(item);
     };
     legendItem(COLOR.within, '基準内');
     legendItem(COLOR.over, '超過（目印まで）');
     legendItem(COLOR.overHard, '超過（目印を超えた分）');
+    if(s.remainingDays > 0) legendItem(PROJECTED_FILL, '見込み（未消化 × 8h）');
     legendItem(COLOR.track, '残枠');
     wrap.appendChild(legend);
 
@@ -275,6 +293,10 @@ function createTrackBlock(s, opt) {
     const over1  = Math.min(over, opt.mark);
     const over2  = Math.max(0, over - opt.mark);
 
+    // 見込みが目印を超える分（実績で既に超えていればその上積み）
+    const projectedOver     = Math.max(0, s.projected - opt.base);
+    const projectedOverMark = Math.max(0, projectedOver - opt.mark);
+
     const block = mk('span', 'display:block;margin-top:6px;');
 
     // 見出し（基準値と目印をここに書く）
@@ -282,21 +304,34 @@ function createTrackBlock(s, opt) {
     label.appendChild(mk('span', 'color:' + COLOR.ink + ';', opt.title + ' ' + getHourMinuterStr(opt.base)));
     label.appendChild(mk('span', null, '（' + opt.sub + '）・目印 +' + opt.mark + 'h'
         + (over2 > 0 ? '　超過 +' + opt.mark + 'h を ' + getHourMinuterStr(over2) + ' 超' : '')));
+    if(s.remainingDays > 0) {
+        const projText = '　見込 ' + getHourMinuterStr(s.projected)
+            + (projectedOverMark > 0
+                ? '（見込で +' + opt.mark + 'h を ' + getHourMinuterStr(projectedOverMark) + ' 超）'
+                : '（見込でも +' + opt.mark + 'h 以内）');
+        label.appendChild(mk('span', 'color:' + COLOR.projected + ';', projText));
+    }
     block.appendChild(label);
 
     // トラック
     const track = mk('span', 'display:block;position:relative;height:14px;margin-top:2px;border-radius:3px;background:' + COLOR.track + ';');
-    const addSeg = (from, len, color, title) => {
+    const addSeg = (from, len, background, title) => {
         if(len <= 0) return;
         const seg = mk('span',
             'position:absolute;top:0;bottom:0;left:' + rate(from) + ';width:' + rate(len) + ';' +
-            'min-width:2px;background:' + color + ';');
+            'min-width:2px;background:' + background + ';');
         seg.title = title;
         track.appendChild(seg);
     };
     addSeg(0, within, COLOR.within, opt.title + '内 ' + getHourMinuterStr(within));
     addSeg(within, over1, COLOR.over, '超過（+' + opt.mark + 'h まで） ' + getHourMinuterStr(over1));
     addSeg(within + over1, over2, COLOR.overHard, '超過（+' + opt.mark + 'h 超） ' + getHourMinuterStr(over2));
+    // 未消化の平日を 8h で埋めた場合の上積み
+    if(s.remainingDays > 0) {
+        addSeg(s.workTime, s.projected - s.workTime, PROJECTED_FILL,
+               '見込みの上積み ' + getHourMinuterStr(s.projected - s.workTime)
+               + '（未消化 ' + s.remainingDays + '日 × 8h）');
+    }
 
     const addMark = (x, color, title) => {
         if(x > ceiling) return;
@@ -311,6 +346,11 @@ function createTrackBlock(s, opt) {
     // 当月は「現時点の基準（8h × 経過した勤務日数）」も薄く立てる
     if(opt.showNowMark && s.isThisMonth && s.nowBasis < opt.base) {
         addMark(s.nowBasis, COLOR.markNow, '現時点の基準 ' + getHourMinuterStr(s.nowBasis));
+    }
+    // 着地見込みの位置
+    if(s.remainingDays > 0) {
+        addMark(s.projected, COLOR.projected,
+                '見込み ' + getHourMinuterStr(s.projected) + '（未消化 ' + s.remainingDays + '日 × 8h）');
     }
     block.appendChild(track);
 
