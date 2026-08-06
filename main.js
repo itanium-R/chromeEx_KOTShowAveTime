@@ -9,6 +9,10 @@ const OVER_MARK_BASE         = 45;  // 基準時間からの目印（基準 +45h
 const OVER_MARK_CONTRACT     = 30;  // 契約時間からの目印（契約 +30h）
 const METER_HEADROOM         = 75;  // メーターの上限（基準 + これ）
 
+// 各段に添える運用上の注意
+const NOTE_BASE     = '基準を ' + OVER_MARK_BASE + ' 時間超過しそうな場合は上長への申請が必要';
+const NOTE_CONTRACT = '契約の時間外労働（超過分）の時間は残業代の計算に用いられる';
+
 const COLOR = {
     within   : '#4a6ea8',  // 基準内・契約内
     over     : '#8a5712',  // 超過（目印まで）
@@ -237,11 +241,13 @@ function createMeter(s) {
     // 基準時間ベース
     if(s.baseTime > 0) {
         wrap.appendChild(createTrackBlock(s, {
-            title   : '基準',
-            base    : s.baseTime,
-            mark    : OVER_MARK_BASE,
-            sub     : getBaseTimeSource(s),
-            ceiling : ceiling
+            title      : '基準',
+            base       : s.baseTime,
+            mark       : OVER_MARK_BASE,
+            sub        : getBaseTimeSource(s),
+            note       : NOTE_BASE,
+            alertOnMark: true,
+            ceiling    : ceiling
         }));
     }
 
@@ -251,6 +257,7 @@ function createMeter(s) {
         base        : s.contract,
         mark        : OVER_MARK_CONTRACT,
         sub         : '8h × 平日' + s.fullWorkDays + '日',
+        note        : NOTE_CONTRACT,
         ceiling     : ceiling,
         showNowMark : true
     }));
@@ -280,9 +287,9 @@ function createMeter(s) {
 }
 
 /**
- * メーター 1 段ぶん（見出し + トラック）を作る
+ * メーター 1 段ぶん（見出し + トラック + 注意）を作る
  * @param   {object} s   summary
- * @param   {object} opt title / base / mark / sub / ceiling / showNowMark
+ * @param   {object} opt title / base / mark / sub / note / alertOnMark / ceiling / showNowMark
  * @returns {HTMLElement}
  */
 function createTrackBlock(s, opt) {
@@ -354,6 +361,15 @@ function createTrackBlock(s, opt) {
                 '見込み ' + getHourMinuterStr(s.projected) + '（未消化 ' + s.remainingDays + '日 × 8h）');
     }
     block.appendChild(track);
+
+    // 運用上の注意。目印を超えている（または超える見込みの）ときは強調する
+    if(opt.note) {
+        const isAlert = !!opt.alertOnMark && (over2 > 0 || projectedOverMark > 0);
+        block.appendChild(mk('span',
+            'display:block;margin-top:2px;font-size:10px;' +
+            (isAlert ? 'color:' + COLOR.overHard + ';font-weight:bold;' : 'color:' + COLOR.muted + ';'),
+            opt.note));
+    }
 
     return block;
 }
