@@ -222,9 +222,10 @@ function createSummaryRows(s) {
  * @returns {HTMLElement}
  */
 function createMeter(s) {
-    // 見込みが枠を超える場合は目盛りを見込みまで広げる
+    // 目盛りの端は時間単位に切り上げる（分が出ると読みにくいため）
+    // 切り上げなので、基準 +75h や見込みがはみ出すことはない
     const headroomCeiling = Math.max(s.baseTime, s.contract) + METER_HEADROOM;
-    const ceiling = Math.max(headroomCeiling, s.projected);
+    const ceiling = Math.ceil(Math.max(headroomCeiling, s.projected));
     const wrap = mk('span', 'display:block;margin-top:8px;');
 
     // 見出し
