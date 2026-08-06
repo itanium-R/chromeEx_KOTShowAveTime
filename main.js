@@ -1,10 +1,11 @@
 const WORKDAY_STR     = '平日';
 const TIME_REGEXP     = /\d+.\d\d/;
 const BASIS_WORK_TIME = 8;
+const BASE_TIME_LABEL = '元の基準時間';
 
 // メーターの設定
-const WEEKLY_STATUTORY_HOURS = 40;  // 法定労働時間（週）
-const OVER_MARK_STATUTORY    = 45;  // 法定労働時間からの目印（法定 +45h）
+const WEEKLY_STATUTORY_HOURS = 40;  // 法定労働時間（週）。基準時間が画面から取れないときの計算に使う
+const OVER_MARK_BASE         = 45;  // 基準時間からの目印（基準 +45h）
 const OVER_MARK_CONTRACT     = 30;  // 契約時間からの目印（契約 +30h）
 const METER_HEADROOM         = 75;  // メーターの上限（基準 + これ）
 
@@ -13,7 +14,7 @@ const COLOR = {
     over    : '#8a5712',  // 超過（目印まで）
     overHard: '#a8402c',  // 超過（目印を超えた分）
     track   : '#e7eaf0',  // 残枠
-    mark    : '#3d444f',  // 基準（法定／契約）の目印
+    mark    : '#3d444f',  // 基準（基準時間／契約時間）の目印
     markWarn: '#a8402c',  // 目印（+45h / +30h）
     markNow : '#8a9099',  // 現時点の基準（当月のみ）
     ink     : '#3d444f',
@@ -63,22 +64,30 @@ function showAveTime() {
     const workTimeStr = WORK_TIME_ELM.innerText;
     const workTime = getHourNumFromHourMinuteStr(workTimeStr);
 
-    // 賃金計算期間の暦日数（法定労働時間の枠に使う）。行数が不自然なら選択中の年月から求める
+    // 賃金計算期間の暦日数（基準時間を画面から取れないときの計算に使う）
     let calendarDays = WORK_DAY_TYPE_ELMS.length;
     if(calendarDays < 28 || calendarDays > 31) calendarDays = getDaysInMonth(YEAR_MONTH_SELECT_ELM.value);
 
+    // 基準時間は画面の「元の基準時間」から取り、取れなければ法定労働時間の枠を暦から計算する
+    const baseTimeStr = getOriginalBaseTime();
+    const baseTimeFromScreen = (baseTimeStr === null) ? NaN : getHourNumFromHourMinuteStr(baseTimeStr);
+    const isBaseFromScreen = !isNaN(baseTimeFromScreen) && baseTimeFromScreen > 0;
+    const baseTime = isBaseFromScreen
+        ? baseTimeFromScreen
+        : floorToMinute(WEEKLY_STATUTORY_HOURS * calendarDays / 7);
+
     // バルーンに渡す値をまとめる
     const summary = {
-        workTime     : workTime,                        // 当月の総労働時間
-        workTimeStr  : workTimeStr,                     // 画面表記そのまま
-        workDays     : workDays,                        // 勤務日+有給日数（先月以前は平日数）
-        fullWorkDays : fullWorkDays,                    // 月全体の平日数
-        calendarDays : calendarDays,                    // 賃金計算期間の暦日数
-        nowBasis     : BASIS_WORK_TIME * workDays,      // 現時点の基準時間
-        contract     : BASIS_WORK_TIME * fullWorkDays,  // 月間の契約時間（8h × 平日数）
-        // 法定労働時間の枠（週40h × 暦日数 ÷ 7）。KOT の「基準時間」に一致するよう分未満は切り捨てる
-        statutory    : floorToMinute(WEEKLY_STATUTORY_HOURS * calendarDays / 7),
-        isThisMonth  : isThisMonth
+        workTime        : workTime,                        // 当月の総労働時間
+        workTimeStr     : workTimeStr,                     // 画面表記そのまま
+        workDays        : workDays,                        // 勤務日+有給日数（先月以前は平日数）
+        fullWorkDays    : fullWorkDays,                    // 月全体の平日数
+        calendarDays    : calendarDays,                    // 賃金計算期間の暦日数
+        nowBasis        : BASIS_WORK_TIME * workDays,      // 現時点の基準時間
+        contract        : BASIS_WORK_TIME * fullWorkDays,  // 月間の契約時間（8h × 平日数）
+        baseTime        : baseTime,                        // 基準時間（元の基準時間 or 法定労働時間の枠）
+        isBaseFromScreen: isBaseFromScreen,                // 基準時間を画面から取れたか
+        isThisMonth     : isThisMonth
     };
 
     // 平均時間を計算・表示（ホバーで内訳とメーターを出す）
@@ -100,6 +109,27 @@ function showAveTime() {
             );
         }
     }
+}
+
+/**
+ * 画面の「元の基準時間」を返す
+ * 見出しセルを探し、同じ列の 1 つ下の行にある値を取る
+ * @returns {string|null} hh.mm となる文字列（見つからなければ null）
+ */
+function getOriginalBaseTime() {
+    const headerCell = Array.from(document.querySelectorAll('th, td'))
+        .find(el => el.textContent.trim() === BASE_TIME_LABEL);
+    if(!headerCell) return null;
+
+    const table = headerCell.closest('table');
+    if(!table) return null;
+
+    const rows = Array.from(table.querySelectorAll('tr'));
+    const headerRowIndex = rows.findIndex(row => row.contains(headerCell));
+    if(headerRowIndex === -1 || headerRowIndex + 1 >= rows.length) return null;
+
+    const dataCell = rows[headerRowIndex + 1].children[headerCell.cellIndex];
+    return dataCell ? dataCell.textContent.trim() : null;
 }
 
 /**
@@ -129,13 +159,24 @@ function createToggle(labelText, summary, classPrefix) {
 }
 
 /**
+ * 基準時間の出どころを表す短い説明を返す
+ * @param   {object} s summary
+ * @returns {string}
+ */
+function getBaseTimeSource(s) {
+    return s.isBaseFromScreen
+        ? BASE_TIME_LABEL
+        : '40h × ' + s.calendarDays + '日 ÷ 7';
+}
+
+/**
  * バルーン上部の内訳（数値の行）を作る
  * @param   {object} s summary
  * @returns {HTMLElement}
  */
 function createSummaryRows(s) {
-    const overContract  = s.workTime - s.contract;
-    const overStatutory = s.workTime - s.statutory;
+    const overContract = s.workTime - s.contract;
+    const overBase     = s.workTime - s.baseTime;
 
     const rows = [
         ['勤務日+有給日数', s.workDays + '日'],
@@ -144,10 +185,10 @@ function createSummaryRows(s) {
         ['契約時間（8h × 平日' + s.fullWorkDays + '日）', getHourMinuterStr(s.contract) + '時間'],
         [(overContract >= 0 ? '契約時間の超過' : '契約時間まで残り'), getHourMinuterStr(Math.abs(overContract)) + '時間']
     ];
-    if(s.statutory > 0) {
-        rows.push(['法定労働時間（40h × ' + s.calendarDays + '日 ÷ 7）', getHourMinuterStr(s.statutory) + '時間']);
-        rows.push([(overStatutory >= 0 ? '法定労働時間の超過' : '法定労働時間まで残り'),
-                   getHourMinuterStr(Math.abs(overStatutory)) + '時間']);
+    if(s.baseTime > 0) {
+        rows.push([BASE_TIME_LABEL + '（' + getBaseTimeSource(s) + '）', getHourMinuterStr(s.baseTime) + '時間']);
+        rows.push([(overBase >= 0 ? BASE_TIME_LABEL + 'の超過' : BASE_TIME_LABEL + 'まで残り'),
+                   getHourMinuterStr(Math.abs(overBase)) + '時間']);
     }
 
     const box = mk('span', 'display:block;');
@@ -161,12 +202,12 @@ function createSummaryRows(s) {
 }
 
 /**
- * メーターを作る（法定労働時間ベースと契約時間ベースを同じ目盛りで 2 段）
+ * メーターを作る（基準時間ベースと契約時間ベースを同じ目盛りで 2 段）
  * @param   {object} s summary
  * @returns {HTMLElement}
  */
 function createMeter(s) {
-    const ceiling = Math.max(s.statutory, s.contract) + METER_HEADROOM;
+    const ceiling = Math.max(s.baseTime, s.contract) + METER_HEADROOM;
     const wrap = mk('span', 'display:block;margin-top:8px;');
 
     // 見出し
@@ -175,13 +216,13 @@ function createMeter(s) {
     head.appendChild(mk('span', null, '上限 ' + getHourMinuterStr(ceiling) + '（+' + METER_HEADROOM + 'h）'));
     wrap.appendChild(head);
 
-    // 法定労働時間ベース
-    if(s.statutory > 0) {
+    // 基準時間ベース
+    if(s.baseTime > 0) {
         wrap.appendChild(createTrackBlock(s, {
-            title   : '法定',
-            base    : s.statutory,
-            mark    : OVER_MARK_STATUTORY,
-            sub     : '40h × ' + s.calendarDays + '日 ÷ 7',
+            title   : '基準',
+            base    : s.baseTime,
+            mark    : OVER_MARK_BASE,
+            sub     : getBaseTimeSource(s),
             ceiling : ceiling
         }));
     }
